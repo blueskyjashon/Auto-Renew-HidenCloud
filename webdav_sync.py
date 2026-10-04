@@ -6,6 +6,8 @@
   WEBDAV_URL   WebDAV 根地址 (Infinicloud My Page -> Apps Connection 里查看)
   WEBDAV_USER  WebDAV 用户名
   WEBDAV_PASS  WebDAV Apps Connection 密码
+  WEBDAV_COOKIE_MODE  可选, essential(默认, 只保存必要 Cookie) / all(保存全部)
+  WEBDAV_EXTRA_COOKIES 可选, essential 模式下额外保留的 Cookie 名, 逗号分隔
   WEBDAV_DIR   可选, 云端子目录, 默认 hidencloud (不存在会自动创建);
                填 "-" 表示直接放在 WEBDAV_URL 根目录 (和旧脚本一致)
                子目录创建失败时, 也会自动回退到根目录
@@ -19,6 +21,11 @@ import hashlib
 import requests
 
 
+# 必要 Cookie: 取自原脚本(已验证可用)的"关键 Cookie"清单
+ESSENTIAL_NAMES = {"XSRF-TOKEN", "hidencloud_session", "cf_clearance", "hc_cf_turnstile"}
+ESSENTIAL_PREFIXES = ("remember_web_",)
+
+
 class CookieStore:
     def __init__(self, account_key, log=print):
         self.log = log
@@ -26,6 +33,9 @@ class CookieStore:
         self.user = (os.environ.get("WEBDAV_USER") or "").strip()
         self.pwd = os.environ.get("WEBDAV_PASS") or ""
         self.enabled = bool(url and self.user and self.pwd)
+        self.mode = (os.environ.get("WEBDAV_COOKIE_MODE") or "essential").strip().lower()
+        extra = os.environ.get("WEBDAV_EXTRA_COOKIES") or ""
+        self.extra_names = {n.strip() for n in extra.split(",") if n.strip()}
         self._last_fingerprint = None
 
         if not self.enabled:
@@ -73,6 +83,26 @@ class CookieStore:
                 continue
             out.append(c)
         return out
+
+    def _is_essential(self, name):
+        return (name in ESSENTIAL_NAMES or name in self.extra_names
+                or any(name.startswith(p) for p in ESSENTIAL_PREFIXES))
+
+    def _select(self, cookies):
+        """返回 (要保存的 cookies, 说明文字列表)。essential 模式只保留必要 Cookie。"""
+        if self.mode == "all":
+            names = sorted({c.get("name", "") for c in cookies})
+            return cookies, [f"🍪 保存全部 Cookie ({len(cookies)} 个): {', '.join(names)}"]
+        kept = [c for c in cookies if self._is_essential(c.get("name", ""))]
+        has_login = any(c["name"] == "hidencloud_session" or c["name"].startswith("remember_web_")
+                        for c in kept)
+        if not has_login:
+            return cookies, ["⚠️ 未找到登录相关 Cookie，为安全起见改为保存全部"]
+        dropped = sorted({c.get("name", "") for c in cookies if not self._is_essential(c.get("name", ""))})
+        notes = [f"🍪 保存必要 Cookie {len(kept)} 个: {', '.join(sorted({c['name'] for c in kept}))}"]
+        if dropped:
+            notes.append(f"🍪 未保存 {len(cookies) - len(kept)} 个: {', '.join(dropped)}")
+        return kept, notes
 
     def _mkcol(self):
         try:
@@ -124,10 +154,13 @@ class CookieStore:
         if not cookies:
             self.log("⚪ 无可保存的 Cookie，跳过上传")
             return False
+        cookies, notes = self._select(cookies)
         fp = self._fingerprint(cookies)
         if not force and fp == self._last_fingerprint:
             self.log("⚪ Cookie 无变化，跳过上传")
             return True
+        for line in notes:
+            self.log(line)
 
         body = json.dumps(
             {"version": 1, "saved_at": int(time.time()), "cookies": cookies},
