@@ -6,6 +6,7 @@ try:
     from patchright.sync_api import sync_playwright
 except ImportError:
     from playwright.sync_api import sync_playwright
+from webdav_sync import CookieStore   # [新增] Infinicloud(WebDAV) 登录态同步
 
 # --- 环境变量 (可在Settings里设置secrets或者私库直接填写在双引号里)---
 COOKIE_VALUE = os.environ.get('COOKIE_VALUE') or ""    # remember_web cookie 值，必填
@@ -25,6 +26,9 @@ REQUESTS_PROXIES = {"http": PROXY_SERVER, "https": PROXY_SERVER} if IS_PROXY els
 # 日志
 def log(message):
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}", flush=True)
+
+# [新增] WebDAV 登录态存储；未配置 WEBDAV_* 时自动跳过，不影响原有流程
+store = CookieStore(EMAIL or "default", log=log)
 
 STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -408,6 +412,25 @@ def solve_turnstile(page, timeout=120, success_check=None,
     return False
 
 def login(page):
+    # 0. [新增] 优先使用 Infinicloud 云端保存的完整登录态
+    saved = store.load()
+    if saved:
+        try:
+            page.context.add_cookies(saved)
+            page.goto(f"{BASE_URL}/dashboard", wait_until="domcontentloaded", timeout=60000)
+            solve_turnstile(page, timeout=90, success_check=page_ready, reload_after=8)
+            log(f"📝 当前Title: {page.title()}")
+            if "auth/login" not in page.url:
+                log("✅ 云端缓存登录成功！当前已到达dashboard页面")
+                return True
+            log("⚠️ 云端缓存已失效，继续尝试其他登录方式...")
+        except Exception as e:
+            log(f"⚠️ 云端缓存登录出现异常: {e}")
+        try:
+            page.context.clear_cookies()   # 清掉失效 Cookie，避免干扰后续登录
+        except Exception:
+            pass
+
     # 1. Cookie 登录尝试
     if COOKIE_VALUE:
         log("📇 尝试 Cookie 登录...")
@@ -687,11 +710,13 @@ def main():
     # 检查必要环境变量
     log(f"🔍 凭证检测: COOKIE_VALUE={'已配置' if COOKIE_VALUE else '未配置'}, "
         f"EMAIL={'已配置' if EMAIL else '未配置'}, PASSWORD={'已配置' if PASSWORD else '未配置'}")
-    if not COOKIE_VALUE and not (EMAIL and PASSWORD):
+    if not COOKIE_VALUE and not (EMAIL and PASSWORD) and not store.enabled:
         log("❌ 缺少登录凭证")
         sys.exit(1)
 
     global SERVICE_URL
+
+    logged_in = False   # [新增] 登录成功后才允许把 Cookie 回写云端
 
     with sync_playwright() as p:
         try:
@@ -721,6 +746,8 @@ def main():
 
             if not login(page):
                 sys.exit(1)
+            logged_in = True
+            store.save(context.cookies())   # [新增] 登录成功立即保存一次
 
             # 登录成功后，自动获取 Server ID
             server_id = get_server_id(page)
@@ -761,6 +788,12 @@ def main():
             log(f"❌ 浏览器启动出错: {e}")
             sys.exit(1)
         finally:
+            # [新增] 结束前再保存一次（续期后服务端可能刷新了 Cookie；无变化会自动跳过）
+            if logged_in:
+                try:
+                    store.save(context.cookies())
+                except Exception as e:
+                    log(f"⚠️ 结束前保存云端缓存失败: {e}")
             if 'browser' in locals() and browser:
                 browser.close()
 
