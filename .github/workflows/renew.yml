@@ -48,7 +48,22 @@ jobs:
           COOKIE_VALUE: ${{ secrets.COOKIE_VALUE }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
+          WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
+          WEBDAV_PASS: ${{ secrets.WEBDAV_PASS }}
+          WEBDAV_COOKIE_MODE: ${{ vars.WEBDAV_COOKIE_MODE }}
+          WEBDAV_EXTRA_COOKIES: ${{ vars.WEBDAV_EXTRA_COOKIES }}
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python -u app.py
+
+      # 失败时保留截图方便排查 (仅保存1天；截图可能含账号信息，公开仓库请留意)
+      - name: 📸 上传调试截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: '*.png'
+          if-no-files-found: ignore
+          retention-days: 1
 
       # 更新时间到time.txt,避免6个月未更新导致工作流暂停
       - name: 🕒 更新时间
@@ -61,11 +76,11 @@ jobs:
             echo "No need to commit"
           else
             git commit -m "⏱️ Auto Update by Github Actions $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')"
-            git push origin main
+            git push origin HEAD
           fi
       
       - name: 🧹 清理旧的工作流运行记录
-        if: always()
+        if: always() && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
