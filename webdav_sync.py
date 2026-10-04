@@ -137,7 +137,16 @@ class CookieStore:
         self.log("☁️ 正在上传最新登录态到 Infinicloud...")
 
         def put(url):
-            return self.http.put(url, data=body, headers=headers, timeout=30)
+            # 连接被对端断开等网络异常时自动重试 (最多 3 次)
+            last_err = None
+            for attempt in range(3):
+                try:
+                    return self.http.put(url, data=body, headers=headers, timeout=30)
+                except (requests.ConnectionError, requests.Timeout) as e:
+                    last_err = e
+                    self.log(f"⚠️ 上传连接异常 (第 {attempt + 1}/3 次): {type(e).__name__}")
+                    time.sleep(2)
+            raise last_err
 
         def brief(r):
             text = " ".join((r.text or "").split())[:120]
