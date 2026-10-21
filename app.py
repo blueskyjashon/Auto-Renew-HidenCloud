@@ -15,7 +15,7 @@ COOKIE_VALUE = os.environ.get('COOKIE_VALUE') or ""    # remember_web cookie 值
 EMAIL        = os.environ.get('EMAIL') or ""           # 登录邮箱,可选，作为备用, 必填
 PASSWORD     = os.environ.get('PASSWORD') or ""        # 登录密码,可选，作为备用, 必填
 TG_CHAT_ID   = os.environ.get('TG_CHAT_ID') or ""      # Telegram Chat ID,可选，通知
-TG_BOT_TOKEN = os.environ.get('TG_BOT_TOKEN') or ""    # Telegram Bot Token,可选 
+TG_BOT_TOKEN = os.environ.get('TG_BOT_TOKEN') or ""    # Telegram Bot Token,可选    
 
 BASE_URL = "https://dash.hidencloud.com"
 LOGIN_URL = f"{BASE_URL}/auth/login"
@@ -457,14 +457,12 @@ def login(page):
     try:
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
         handle_cloudflare(page, timeout=240)
-        time.sleep(2)
-        
+        time.sleep(8) # 等页面完全加载
         log("⌨️ 输入账号密码...")
         # 真实表单字段：input[name="username"]（可填邮箱或用户名）/ input[name="password"]
         user_input = page.locator('input[name="username"], input[name="email"], input[type="email"]').first
         pwd_input = page.locator('input[name="password"], input[type="password"]').first
         try:
-            # 登录表单要等安全验证页通过后才会渲染
             user_input.wait_for(state="visible", timeout=30000)
         except Exception:
             handle_cloudflare(page, timeout=120)
@@ -473,14 +471,15 @@ def login(page):
         pwd_input.fill(PASSWORD, timeout=10000)
         time.sleep(0.5)
         handle_cloudflare(page, timeout=60)
-
+        
         # 登录表单自带 Turnstile，提交前先等它的 token
         if not solve_modal_turnstile(page, timeout=90):
             log("⚠️ 登录表单的 Turnstile 未确认通过，仍将尝试提交...")
         
         log("🖱️ 点击登录按钮提交...")
+        time.sleep(3) # 等Turnstile完全通过
         try:
-            page.click('button[type="submit"]', timeout=8000)
+            page.click('button[type="submit"]', timeout=10000)
         except Exception:
             page.locator('button:has-text("Sign in"), button:has-text("登录")').first.click(timeout=10000)
         time.sleep(3)
@@ -507,6 +506,8 @@ def login(page):
         log(f"📝 当前Title: {page_title}")
         if not _is_logged_in(page):
             log("❌ 登录失败。")
+            status = "❌ 登录失败"
+            send_telegram_notification(status)  # 发送 Telegram 通知 
             return False
         log(f"✅ 账号密码登录成功！当前已到达dashboard页面")
         return True
@@ -542,6 +543,8 @@ def get_server_id(page):
             return server_id
 
         log("❌ 所有 URL 均未找到 Server ID")
+        status = "❌ 未获取到server ID, 检查服务是否被删除"
+        send_telegram_notification(status)  # 发送 Telegram 通知 
         return None
     except Exception as e:
         log(f"❌ 获取 Server ID 失败: {e}")
@@ -576,27 +579,23 @@ def renew_service(page):
         if page.url != SERVICE_URL:
             page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
         handle_cloudflare(page)
-
+        time.sleep(12) # 等待续期页面完全加载,未完全加载无法点击
         log("🖱️ 准备点击 Renew 按钮...")
-        time.sleep(3)
         renew_btn = page.locator('button:has-text("Renew")')
         create_btn = page.locator('button:has-text("Create Invoice")')
-
         modal_opened = False
-        for i in range(10):  # [调整] 原为 6
+        for i in range(6):
             try:
                 renew_btn.wait_for(state="visible", timeout=10000)
                 renew_btn.scroll_into_view_if_needed()
-                log(f"🖱️ 第 {i+1} 次尝试点击 'Renew'...")
+                log(f"🖱️ 第 {i+1} 次尝试点击 Renew...")
                 renew_btn.click()
-
-                # 等待一小段时间，检测是否出现“未到续期时间”弹窗
-                time.sleep(3)
+                time.sleep(3) # 等待一小段时间，检测是否出现“未到续期时间”弹窗
                 page_text = page.locator("body").inner_text()
                 if "Renewal Restricted" in page_text or "can only renew" in page_text.lower():
                     log("⚠️ 未到续期时间，无法续期。")
                     page.screenshot(path="renew_not_allowed.png")
-                    return "NOT_TIME"   # 特殊状态
+                    return "NOT_TIME" 
 
                 log("🖲️ 等待弹窗出现...")
                 try:
@@ -622,16 +621,17 @@ def renew_service(page):
             page.screenshot(path="turnstile_timeout.png")
 
         # 点击 Create Invoice；未跳转说明验证未通过/已过期，重做验证后再试
-        time.sleep(3)
         new_invoice_url = None
+        time.sleep(2)
         for attempt in range(6):
-            log(f"🖱️ 点击 'Create Invoice'（第 {attempt + 1} 次）...")
+            log(f"🖱️ 点击 Create Invoice（第 {attempt + 1} 次）...")
             try:
-                create_btn.wait_for(state="visible", timeout=20000)
+                create_btn.wait_for(state="visible", timeout=30000)
                 create_btn.click(timeout=20000)
             except Exception as e:
                 log(f"⚠️ 点击 Create Invoice 失败: {e}")
                 solve_modal_turnstile(page, timeout=45)
+                time.sleep(2)
                 continue
 
             start_wait = time.time()
@@ -665,11 +665,8 @@ def renew_service(page):
         pay_btn.wait_for(state="visible", timeout=30000)
         pay_btn.click()
         log("✅ Pay 按钮已点击")
-
-        # 等待支付确认页面或跳转回服务页
-        time.sleep(5)
-        # 返回服务管理页面以获取新的到期时间
-        page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(6) # 等待支付确认页面或跳转回服务页
+        page.goto(SERVICE_URL, wait_until="domcontentloaded", timeout=60000) # 返回服务管理页面以获取新的到期时间
         handle_cloudflare(page)
         return True
 
