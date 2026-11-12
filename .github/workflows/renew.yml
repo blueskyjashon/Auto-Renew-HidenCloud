@@ -3,7 +3,7 @@ name: Auto Renew HidenCloud
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 7 * * 3' # 根据到期时间的前两天推算星期几来续期，最后一个数字代表星期
+    - cron: '30 3 * * 3' # 根据到期时间的前一天推算星期几来续期，最后一个数字代表星期
 
 permissions:
   contents: write
@@ -44,8 +44,10 @@ jobs:
       - name: 🚀 运行续期脚本
         env:
           EMAIL: ${{ secrets.EMAIL }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-          COOKIE_VALUE: ${{ secrets.COOKIE_VALUE }}
+          # PASSWORD: ${{ secrets.PASSWORD }}
+          REGION: ${{ secrets.REGION }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          # COOKIE_VALUE: ${{ secrets.COOKIE_VALUE }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
